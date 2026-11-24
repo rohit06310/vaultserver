@@ -260,17 +260,6 @@ Route container stdout streams through VaultlessSecrets before shipping to Datad
 
 ---
 
-## 🗺️ Project Milestones
-
-- [x] **Week 1**: Core regex engine, JWT detection, synthetic seed test dataset
-- [x] **Week 2**: AWS Access Key ID, URI connection passwords, PKCS#1/8 private keys
-- [x] **Week 3**: Safe SQLite incident recording, deduplication upserts, SHA-256 token hashing
-- [x] **Week 4**: JSON-field-aware recursive parsing with dot-notated field path tracking
-- [x] **Week 5**: Shannon entropy analysis with UUID & hex false-positive guards, benchmark suite
-- [x] **Week 6**: Real-time web dashboard, interactive playground, and live incident ledger
-
----
-
 ## 📜 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
