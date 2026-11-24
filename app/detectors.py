@@ -3,6 +3,7 @@
 Each rule = a name, a secret type, and a regex describing the SHAPE of the secret.
 To support a new secret type, add one Rule to RULES and add seed lines for it.
 """
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -14,6 +15,12 @@ class Rule:
     secret_type: str   # label used in the redaction placeholder
     pattern: re.Pattern
     replacer: Optional[Callable[[re.Match, "Rule"], str]] = None
+    extractor: Optional[Callable[[re.Match], str]] = None
+
+
+def hash_secret(secret_text: str) -> str:
+    """Compute deterministic SHA-256 hash of a secret for correlation."""
+    return hashlib.sha256(secret_text.encode("utf-8")).hexdigest()
 
 
 def _default_replacer(match: re.Match, rule: Rule) -> str:
@@ -23,6 +30,11 @@ def _default_replacer(match: re.Match, rule: Rule) -> str:
 def _uri_password_replacer(match: re.Match, rule: Rule) -> str:
     # Retains protocol, user, host, port, db; redacts only :password@
     return f"{match.group(1)}[REDACTED:{rule.secret_type}]{match.group(3)}"
+
+
+def _uri_password_extractor(match: re.Match) -> str:
+    # Extracts only the raw password part from uri match
+    return match.group(2)
 
 
 RULES = [
@@ -54,6 +66,7 @@ RULES = [
             r"([a-zA-Z][a-zA-Z0-9+.-]+://[^:\s/@]+:)([^@\s/]+)(@[^\s\"'>]+)"
         ),
         replacer=_uri_password_replacer,
+        extractor=_uri_password_extractor,
     ),
 ]
 
@@ -62,13 +75,20 @@ def redact(text: str) -> tuple[str, list[dict]]:
     """Replace every secret found in text.
 
     Returns (clean_text, findings). Findings never contain the secret itself,
-    only the type and the rule that caught it.
+    only the type, the rule, the safe hash for correlation, and the location.
     """
     findings: list[dict] = []
 
     for rule in RULES:
         def _replace(match: re.Match, rule: Rule = rule) -> str:
-            findings.append({"type": rule.secret_type, "rule": rule.name})
+            raw_secret = rule.extractor(match) if rule.extractor else match.group(0)
+            secret_hash = hash_secret(raw_secret)
+            findings.append({
+                "type": rule.secret_type,
+                "rule": rule.name,
+                "hash": secret_hash,
+                "location": "raw_log",
+            })
             if rule.replacer:
                 return rule.replacer(match, rule)
             return _default_replacer(match, rule)

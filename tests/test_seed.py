@@ -1,13 +1,23 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app import storage
 
 client = TestClient(app)
 
 SEED_FILE = Path(__file__).resolve().parent.parent / "data" / "seed_logs.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def clean_db():
+    storage.init_db()
+    storage.clear_incidents()
+    yield
+    storage.clear_incidents()
 
 
 def load_seed():
@@ -15,8 +25,8 @@ def load_seed():
         return [json.loads(line) for line in f if line.strip()]
 
 
-def ingest(log: str) -> dict:
-    return client.post("/ingest", json={"log": log}).json()
+def ingest(log: str, location: str = "raw_log") -> dict:
+    return client.post("/ingest", json={"log": log, "location": location}).json()
 
 
 def test_detection_matches_labels():
@@ -67,10 +77,41 @@ def test_findings_never_contain_the_secret():
     for row in load_seed():
         resp = ingest(row["log"])
         for finding in resp["findings"]:
-            assert set(finding.keys()) == {"type", "rule"}
+            assert set(finding.keys()) == {"type", "rule", "hash", "location"}
+            # The hash must be a valid 64-character hex SHA-256 string
+            assert len(finding["hash"]) == 64
+            assert all(c in "0123456789abcdef" for c in finding["hash"])
 
 
 def test_uri_redaction_preserves_connection_context():
     row = next(r for r in load_seed() if r["id"] == 10)
     clean = ingest(row["log"])["clean"]
     assert "postgres://app_user:[REDACTED:PASSWORD]@db.prod.internal:5432/orders_db" in clean
+
+
+def test_incidents_recorded_in_sqlite_with_safe_metadata():
+    row = next(r for r in load_seed() if r["id"] == 8)
+    ingest(row["log"], location="header.auth")
+
+    incidents = client.get("/incidents").json()["incidents"]
+    assert len(incidents) == 1
+    inc = incidents[0]
+    assert inc["secret_type"] == "AWS_ACCESS_KEY_ID"
+    assert inc["rule"] == "aws_access_key_id_v1"
+    assert inc["location"] == "header.auth"
+    assert inc["count"] == 1
+    assert "AKIA" not in json.dumps(inc)
+    assert len(inc["secret_hash"]) == 64
+
+
+def test_incidents_deduplicate_and_increment_counter():
+    log_line = "Error token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig_test12345"
+    ingest(log_line)
+    ingest(log_line)
+    ingest(log_line)
+
+    incidents = client.get("/incidents").json()["incidents"]
+    assert len(incidents) == 1
+    assert incidents[0]["count"] == 3
+    assert incidents[0]["secret_type"] == "JWT"
+    assert incidents[0]["first_seen"] <= incidents[0]["last_seen"]
