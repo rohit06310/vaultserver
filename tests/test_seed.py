@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import storage
+from app.detectors import shannon_entropy, is_high_entropy_secret
+from app.benchmark import run_benchmark
 
 client = TestClient(app)
 
@@ -67,7 +69,6 @@ def test_normal_lines_are_unchanged():
     for row in load_seed():
         if not row["has_secret"]:
             clean = ingest(row["log"])["clean"]
-            # Normal unstructured log remains exact match
             assert clean == row["log"], f"Line {row['id']}: was modified"
 
 
@@ -83,7 +84,6 @@ def test_findings_never_contain_the_secret():
         resp = ingest(row["log"])
         for finding in resp["findings"]:
             assert set(finding.keys()) == {"type", "rule", "hash", "location"}
-            # The hash must be a valid 64-character hex SHA-256 string
             assert len(finding["hash"]) == 64
             assert all(c in "0123456789abcdef" for c in finding["hash"])
 
@@ -123,16 +123,13 @@ def test_incidents_deduplicate_and_increment_counter():
 
 
 def test_json_field_aware_redaction_and_location():
-    # Seed row 3 is structured JSON with nested headers.Authorization
     row = next(r for r in load_seed() if r["id"] == 3)
     resp = ingest(row["log"])
 
-    # Must still be valid parsable JSON
     parsed_clean = json.loads(resp["clean"])
     assert parsed_clean["request"]["headers"]["Authorization"] == "Bearer [REDACTED:JWT]"
     assert parsed_clean["request"]["path"] == "/v1/orders"
 
-    # Location in incident must reflect exact dot notation path
     finding = resp["findings"][0]
     assert finding["location"] == "request.headers.Authorization"
 
@@ -158,3 +155,37 @@ def test_json_with_arrays_and_multiple_keys():
 
     locations = {f["location"] for f in resp["findings"]}
     assert locations == {"tokens[0]", "tokens[2]"}
+
+
+def test_shannon_entropy_calculation():
+    # Low entropy repeated string
+    assert shannon_entropy("aaaaaaaaaaaa") < 1.0
+    # High entropy diverse character string
+    assert shannon_entropy("xK9#mQ2$vL8*zP4!wR7&yT1@bN6%") > 4.5
+
+
+def test_entropy_guard_against_false_positives():
+    # Git SHA hex should not be flagged as a high entropy secret
+    git_sha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    assert not is_high_entropy_secret(git_sha)
+
+    # UUID should not be flagged
+    uuid_str = "7c1e4a90-3b2d-4f6a-9e85-d2c0b1a47f13"
+    assert not is_high_entropy_secret(uuid_str)
+
+
+def test_benchmark_metrics_quality():
+    metrics = run_benchmark(iterations=5)
+    # Check 100% precision and recall on seed dataset
+    assert metrics["precision"] == 1.0
+    assert metrics["recall"] == 1.0
+    assert metrics["false_positives"] == 0
+    assert metrics["false_negatives"] == 0
+    assert metrics["throughput_logs_per_sec"] > 500
+
+
+def test_dashboard_endpoint_serves_html():
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "VaultlessSecrets" in resp.text
+    assert "Safe Incident Ledger" in resp.text

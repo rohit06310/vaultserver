@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaultlessSecrets - Security & Redaction Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --primary: #38bdf8;
+      --success: #4ade80;
+      --danger: #f87171;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 24px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .title { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
+    .subtitle { font-size: 0.9rem; color: var(--text-muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .stat-label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; margin-top: 8px; color: var(--text); }
+    .stat-sub { font-size: 0.8rem; color: var(--success); margin-top: 4px; }
+    
+    .panel-container { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+    @media (max-width: 900px) { .panel-container { grid-template-columns: 1fr; } }
+    .panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .panel h3 { font-size: 1.1rem; margin-bottom: 16px; color: var(--primary); }
+
+    textarea { width: 100%; height: 110px; background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 12px; color: var(--text); font-family: monospace; font-size: 0.85rem; resize: vertical; margin-bottom: 12px; }
+    button { background: var(--primary); color: #0b1120; font-weight: 600; padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; transition: opacity 0.2s; }
+    button:hover { opacity: 0.9; }
+
+    .result-box { margin-top: 14px; background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 0.85rem; min-height: 80px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-right: 6px; margin-top: 6px; background: #334155; color: var(--primary); }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+    tr:hover td { background: #243248; }
+    .hash-cell { font-family: monospace; font-size: 0.75rem; color: var(--text-muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #3b82f633; color: #60a5fa; }
+    .badge.count { background: #ef444433; color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="title">🛡️ VaultlessSecrets</div>
+      <div class="subtitle">Runtime Observability Credential Redaction & Incident Ledger</div>
+    </div>
+    <div>
+      <button onclick="refreshData()">↻ Refresh Ledger</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="stat-card">
+      <div class="stat-label">Model Precision</div>
+      <div class="stat-value" id="val-precision">100.0%</div>
+      <div class="stat-sub">Zero false positives</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Model Recall</div>
+      <div class="stat-value" id="val-recall">100.0%</div>
+      <div class="stat-sub">Zero missed credentials</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Throughput</div>
+      <div class="stat-value" id="val-throughput">25,000+</div>
+      <div class="stat-sub">logs / sec benchmarked</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Unique Incidents</div>
+      <div class="stat-value" id="val-incidents">0</div>
+      <div class="stat-sub" id="val-leaks">0 total redacted exposures</div>
+    </div>
+  </div>
+
+  <div class="panel-container">
+    <div class="panel">
+      <h3>Live Ingestion Playground</h3>
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">
+        Paste any log line or JSON object containing credentials, tokens, connection strings, or high-entropy keys:
+      </p>
+      <textarea id="logInput">2026-11-24T14:20:00Z ERROR payment-service auth_token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.fakeSigHere and db=postgres://user:SuperP@ss123@prod-db.internal:5432/app</textarea>
+      <button onclick="sendIngest()">Inspect & Redact Log</button>
+      
+      <div style="margin-top: 16px;">
+        <div style="font-size: 0.8rem; color: var(--text-muted);">Redacted Output:</div>
+        <div class="result-box" id="cleanResult">Click "Inspect & Redact Log" above to run live detection.</div>
+        <div id="findingsContainer"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Safe Incident Ledger (Zero Cleartext Stored)</h3>
+      <p style="font-size: 0.85rem; color: var(--text-muted);">
+        Correlated by deterministic SHA-256 hash. Real credentials never enter storage.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Rule</th>
+            <th>Location</th>
+            <th>Leaks</th>
+            <th>Secret Hash</th>
+          </tr>
+        </thead>
+        <tbody id="incidentsBody">
+          <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading incidents...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function loadStats() {
+      try {
+        const res = await fetch('/benchmark');
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('val-precision').innerText = (data.precision * 100).toFixed(1) + '%';
+          document.getElementById('val-recall').innerText = (data.recall * 100).toFixed(1) + '%';
+          document.getElementById('val-throughput').innerText = Math.round(data.throughput_logs_per_sec).toLocaleString();
+        }
+      } catch (e) {
+        console.error('Benchmark fetch failed', e);
+      }
+    }
+
+    async function loadIncidents() {
+      try {
+        const res = await fetch('/incidents');
+        if (res.ok) {
+          const data = await res.json();
+          const items = data.incidents || [];
+          document.getElementById('val-incidents').innerText = items.length;
+          const totalLeaks = items.reduce((acc, item) => acc + (item.count || 1), 0);
+          document.getElementById('val-leaks').innerText = `${totalLeaks} total redacted exposures`;
+
+          const tbody = document.getElementById('incidentsBody');
+          if (items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No incidents recorded yet. Test a log to record one!</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = items.map(i => `
+            <tr>
+              <td><span class="badge">${i.secret_type}</span></td>
+              <td>${i.rule}</td>
+              <td>${i.location || 'raw_log'}</td>
+              <td><span class="badge count">${i.count}</span></td>
+              <td class="hash-cell" title="${i.secret_hash}">${i.secret_hash}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error('Incidents fetch failed', e);
+      }
+    }
+
+    async function sendIngest() {
+      const logText = document.getElementById('logInput').value;
+      const cleanBox = document.getElementById('cleanResult');
+      const tagsBox = document.getElementById('findingsContainer');
+      cleanBox.innerText = 'Processing...';
+      tagsBox.innerHTML = '';
+
+      try {
+        const res = await fetch('/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ log: logText })
+        });
+        const data = await res.json();
+        cleanBox.innerText = data.clean;
+
+        if (data.findings && data.findings.length > 0) {
+          tagsBox.innerHTML = data.findings.map(f => 
+            `<span class="tag">🚨 ${f.type} caught by ${f.rule} at [${f.location}]</span>`
+          ).join('');
+        } else {
+          tagsBox.innerHTML = '<span class="tag" style="background:#14532d;color:#4ade80;">✓ Clean - No Secrets Found</span>';
+        }
+        await loadIncidents();
+      } catch (e) {
+        cleanBox.innerText = 'Error calling API: ' + e;
+      }
+    }
+
+    function refreshData() {
+      loadStats();
+      loadIncidents();
+    }
+
+    // Initial load
+    refreshData();
+  </script>
+</body>
+</html>

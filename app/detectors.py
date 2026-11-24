@@ -1,13 +1,64 @@
 """Detection rules and redaction engine for VaultlessSecrets.
 
 Each rule = a name, a secret type, and a regex describing the SHAPE of the secret.
-Includes text redaction and JSON-field-aware structured redaction.
+Includes regex detectors, high-entropy token detection, text redaction, and JSON-field-aware redaction.
 """
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
+
+
+def shannon_entropy(data: str) -> float:
+    """Calculate the Shannon entropy (bits per character) of a string."""
+    if not data:
+        return 0.0
+    length = len(data)
+    frequencies = {}
+    for char in data:
+        frequencies[char] = frequencies.get(char, 0) + 1
+    entropy = 0.0
+    for count in frequencies.values():
+        p = count / length
+        entropy -= p * math.log2(p)
+    return entropy
+
+
+# Lookaround pattern to identify candidate sensitive token assignments:
+# e.g., api_key=..., secret: "...", token="...", password = ...
+TOKEN_KEY_CONTEXT_REGEX = re.compile(
+    r"""(?i)\b(?:api[_-]?key|secret[_-]?token|auth[_-]?token|private[_-]?token|access[_-]?token|client[_-]?secret)\s*[:=]\s*["']?([^\s"'()]+)["']?"""
+)
+
+# Standard UUID regex to reject false-positives
+UUID_REGEX = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Hex-only strings (e.g. order IDs, git commit hashes, md5/sha1 hex) have max possible entropy of log2(16) = 4.0
+HEX_ONLY_REGEX = re.compile(r"^[0-9a-fA-F]+$")
+
+
+def is_high_entropy_secret(candidate: str, threshold: float = 4.3) -> bool:
+    """Checks if a string exhibits high randomness characteristic of generated secrets.
+
+    Guards against common false positives:
+    - UUIDs
+    - Hex strings (git commit hashes, MD5/SHA checksums, order hashes)
+    - Length < 24
+    """
+    if len(candidate) < 24:
+        return False
+    if UUID_REGEX.match(candidate):
+        return False
+    # If the string consists purely of hex characters, typical entropy is bounded <= 4.0
+    if HEX_ONLY_REGEX.match(candidate):
+        return False
+
+    entropy = shannon_entropy(candidate)
+    return entropy >= threshold
 
 
 @dataclass(frozen=True)
@@ -36,6 +87,18 @@ def _uri_password_replacer(match: re.Match, rule: Rule) -> str:
 def _uri_password_extractor(match: re.Match) -> str:
     # Extracts only the raw password part from uri match
     return match.group(2)
+
+
+def _entropy_context_replacer(match: re.Match, rule: Rule) -> str:
+    val = match.group(1)
+    if is_high_entropy_secret(val):
+        full = match.group(0)
+        return full.replace(val, f"[REDACTED:{rule.secret_type}]")
+    return match.group(0)
+
+
+def _entropy_context_extractor(match: re.Match) -> str:
+    return match.group(1)
 
 
 RULES = [
@@ -69,6 +132,14 @@ RULES = [
         replacer=_uri_password_replacer,
         extractor=_uri_password_extractor,
     ),
+    # High-entropy sensitive tokens (API keys, secret tokens)
+    Rule(
+        name="entropy_token_v1",
+        secret_type="HIGH_ENTROPY_KEY",
+        pattern=TOKEN_KEY_CONTEXT_REGEX,
+        replacer=_entropy_context_replacer,
+        extractor=_entropy_context_extractor,
+    ),
 ]
 
 
@@ -82,6 +153,10 @@ def redact_text(text: str, location_prefix: str = "raw_log") -> tuple[str, list[
     for rule in RULES:
         def _replace(match: re.Match, rule: Rule = rule) -> str:
             raw_secret = rule.extractor(match) if rule.extractor else match.group(0)
+            # If this is the entropy rule, skip if entropy check fails
+            if rule.name == "entropy_token_v1" and not is_high_entropy_secret(raw_secret):
+                return match.group(0)
+
             secret_hash = hash_secret(raw_secret)
             findings.append({
                 "type": rule.secret_type,
@@ -135,8 +210,7 @@ def redact(text: str, default_location: str = "raw_log") -> tuple[str, list[dict
 
     If the text is valid JSON (object or array), parses and redacts each field recursively,
     accurately recording the field location (e.g. 'request.headers.Authorization')
-    while preserving valid JSON syntax without altering formatting/indentation unnecessarily.
-    Otherwise, treats it as unstructured plaintext.
+    while preserving valid JSON syntax. Otherwise, treats it as unstructured plaintext.
     """
     stripped = text.strip()
     if (stripped.startswith("{") and stripped.endswith("}")) or (
@@ -145,7 +219,6 @@ def redact(text: str, default_location: str = "raw_log") -> tuple[str, list[dict
         try:
             parsed = json.loads(text)
             clean_struct, findings = redact_json_structure(parsed)
-            # Re-serialize to JSON string
             return json.dumps(clean_struct, separators=(",", ":")), findings
         except (json.JSONDecodeError, TypeError):
             pass
