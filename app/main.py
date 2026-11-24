@@ -13,12 +13,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="VaultlessSecrets (MVP v0.3)", lifespan=lifespan)
+app = FastAPI(title="VaultlessSecrets (MVP v0.4)", lifespan=lifespan)
 
 
 class LogIn(BaseModel):
     log: str
-    location: Optional[str] = "raw_log"
+    location: Optional[str] = None
 
 
 @app.get("/health")
@@ -28,9 +28,10 @@ def health():
 
 @app.post("/ingest")
 def ingest(item: LogIn):
-    clean, findings = redact(item.log)
+    clean, findings = redact(item.log, default_location=item.location or "raw_log")
     for f in findings:
-        loc = item.location or f.get("location", "raw_log")
+        # If user explicitly overrode location, honor it; otherwise use detected JSON field path or raw_log
+        loc = item.location if item.location else f.get("location", "raw_log")
         storage.record_incident(
             secret_hash=f["hash"],
             secret_type=f["type"],

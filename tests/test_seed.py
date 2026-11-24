@@ -25,8 +25,11 @@ def load_seed():
         return [json.loads(line) for line in f if line.strip()]
 
 
-def ingest(log: str, location: str = "raw_log") -> dict:
-    return client.post("/ingest", json={"log": log, "location": location}).json()
+def ingest(log: str, location: str = None) -> dict:
+    payload = {"log": log}
+    if location is not None:
+        payload["location"] = location
+    return client.post("/ingest", json=payload).json()
 
 
 def test_detection_matches_labels():
@@ -63,7 +66,9 @@ def test_secrets_are_removed_from_output():
 def test_normal_lines_are_unchanged():
     for row in load_seed():
         if not row["has_secret"]:
-            assert ingest(row["log"])["clean"] == row["log"], f"Line {row['id']}: was modified"
+            clean = ingest(row["log"])["clean"]
+            # Normal unstructured log remains exact match
+            assert clean == row["log"], f"Line {row['id']}: was modified"
 
 
 def test_request_id_survives_next_to_token():
@@ -115,3 +120,41 @@ def test_incidents_deduplicate_and_increment_counter():
     assert incidents[0]["count"] == 3
     assert incidents[0]["secret_type"] == "JWT"
     assert incidents[0]["first_seen"] <= incidents[0]["last_seen"]
+
+
+def test_json_field_aware_redaction_and_location():
+    # Seed row 3 is structured JSON with nested headers.Authorization
+    row = next(r for r in load_seed() if r["id"] == 3)
+    resp = ingest(row["log"])
+
+    # Must still be valid parsable JSON
+    parsed_clean = json.loads(resp["clean"])
+    assert parsed_clean["request"]["headers"]["Authorization"] == "Bearer [REDACTED:JWT]"
+    assert parsed_clean["request"]["path"] == "/v1/orders"
+
+    # Location in incident must reflect exact dot notation path
+    finding = resp["findings"][0]
+    assert finding["location"] == "request.headers.Authorization"
+
+    incidents = client.get("/incidents").json()["incidents"]
+    assert incidents[0]["location"] == "request.headers.Authorization"
+
+
+def test_json_with_arrays_and_multiple_keys():
+    json_log = json.dumps({
+        "service": "batch-worker",
+        "tokens": [
+            "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6MX0.sig_11111111111111111111",
+            "normal-string",
+            "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6Mn0.sig_22222222222222222222",
+        ]
+    })
+    resp = ingest(json_log)
+    assert resp["secrets_found"] == 2
+    parsed = json.loads(resp["clean"])
+    assert parsed["tokens"][0] == "[REDACTED:JWT]"
+    assert parsed["tokens"][1] == "normal-string"
+    assert parsed["tokens"][2] == "[REDACTED:JWT]"
+
+    locations = {f["location"] for f in resp["findings"]}
+    assert locations == {"tokens[0]", "tokens[2]"}

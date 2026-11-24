@@ -1,12 +1,13 @@
-"""Detection rules for VaultlessSecrets.
+"""Detection rules and redaction engine for VaultlessSecrets.
 
 Each rule = a name, a secret type, and a regex describing the SHAPE of the secret.
-To support a new secret type, add one Rule to RULES and add seed lines for it.
+Includes text redaction and JSON-field-aware structured redaction.
 """
 import hashlib
+import json
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -71,11 +72,10 @@ RULES = [
 ]
 
 
-def redact(text: str) -> tuple[str, list[dict]]:
-    """Replace every secret found in text.
+def redact_text(text: str, location_prefix: str = "raw_log") -> tuple[str, list[dict]]:
+    """Replace secrets in a raw string.
 
-    Returns (clean_text, findings). Findings never contain the secret itself,
-    only the type, the rule, the safe hash for correlation, and the location.
+    Returns (clean_text, findings). Findings never contain the secret itself.
     """
     findings: list[dict] = []
 
@@ -87,7 +87,7 @@ def redact(text: str) -> tuple[str, list[dict]]:
                 "type": rule.secret_type,
                 "rule": rule.name,
                 "hash": secret_hash,
-                "location": "raw_log",
+                "location": location_prefix,
             })
             if rule.replacer:
                 return rule.replacer(match, rule)
@@ -96,3 +96,58 @@ def redact(text: str) -> tuple[str, list[dict]]:
         text = rule.pattern.sub(_replace, text)
 
     return text, findings
+
+
+def redact_json_structure(data: Any, current_path: str = "") -> tuple[Any, list[dict]]:
+    """Recursively redact nested JSON fields while tracking the exact dot-notated field path."""
+    findings: list[dict] = []
+
+    if isinstance(data, dict):
+        new_dict = {}
+        for k, v in data.items():
+            field_path = f"{current_path}.{k}" if current_path else str(k)
+            redacted_val, child_findings = redact_json_structure(v, field_path)
+            new_dict[k] = redacted_val
+            findings.extend(child_findings)
+        return new_dict, findings
+
+    elif isinstance(data, list):
+        new_list = []
+        for idx, item in enumerate(data):
+            field_path = f"{current_path}[{idx}]"
+            redacted_val, child_findings = redact_json_structure(item, field_path)
+            new_list.append(redacted_val)
+            findings.extend(child_findings)
+        return new_list, findings
+
+    elif isinstance(data, str):
+        path_name = current_path if current_path else "value"
+        clean_str, str_findings = redact_text(data, location_prefix=path_name)
+        findings.extend(str_findings)
+        return clean_str, findings
+
+    else:
+        return data, findings
+
+
+def redact(text: str, default_location: str = "raw_log") -> tuple[str, list[dict]]:
+    """Inspect and redact secrets from a log line.
+
+    If the text is valid JSON (object or array), parses and redacts each field recursively,
+    accurately recording the field location (e.g. 'request.headers.Authorization')
+    while preserving valid JSON syntax without altering formatting/indentation unnecessarily.
+    Otherwise, treats it as unstructured plaintext.
+    """
+    stripped = text.strip()
+    if (stripped.startswith("{") and stripped.endswith("}")) or (
+        stripped.startswith("[") and stripped.endswith("]")
+    ):
+        try:
+            parsed = json.loads(text)
+            clean_struct, findings = redact_json_structure(parsed)
+            # Re-serialize to JSON string
+            return json.dumps(clean_struct, separators=(",", ":")), findings
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return redact_text(text, location_prefix=default_location)

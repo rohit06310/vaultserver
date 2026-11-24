@@ -84,7 +84,7 @@ Findings and incidents never contain the secret itself.
 - [x] Week 2 (part 1): AWS access key ID detection
 - [x] Week 2 (part 2): passwords in connection strings, private key blocks
 - [x] Week 3: safe incident records (hash, type, location, rule, first/last seen) in SQLite
-- [ ] Week 4: JSON-field-aware redaction
+- [x] Week 4: JSON-field-aware redaction
 - [ ] Week 5: entropy check + benchmark with precision and recall
 - [ ] Week 6: connect to a real app + simple dashboard
 
