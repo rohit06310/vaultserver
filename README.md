@@ -97,15 +97,7 @@ Results over labeled seed test suite:
 Access the real-time redaction playground and incident ledger at:
 [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
 
-## Roadmap
 
-- [x] Week 1: JWT detection + seed test dataset
-- [x] Week 2 (part 1): AWS access key ID detection
-- [x] Week 2 (part 2): passwords in connection strings, private key blocks
-- [x] Week 3: safe incident records (hash, type, location, rule, first/last seen) in SQLite
-- [x] Week 4: JSON-field-aware redaction
-- [x] Week 5: entropy check + benchmark with precision and recall
-- [x] Week 6: connect to a real app + simple dashboard
 
 ## Test data
 
