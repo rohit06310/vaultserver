@@ -54,7 +54,7 @@ Findings never contain the secret itself.
 
 - [x] Week 1: JWT detection + seed test dataset
 - [x] Week 2 (part 1): AWS access key ID detection
-- [ ] Week 2 (part 2): passwords in connection strings, private key blocks
+- [x] Week 2 (part 2): passwords in connection strings, private key blocks
 - [ ] Week 3: safe incident records (hash, type, location, rule, first/last seen) in SQLite
 - [ ] Week 4: JSON-field-aware redaction
 - [ ] Week 5: entropy check + benchmark with precision and recall

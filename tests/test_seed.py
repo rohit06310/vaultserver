@@ -44,6 +44,9 @@ def test_secrets_are_removed_from_output():
             clean = ingest(row["log"])["clean"]
             assert "eyJ" not in clean, f"Line {row['id']}: JWT still present"
             assert "AKIA" not in clean, f"Line {row['id']}: AWS key still present"
+            assert "MyS3cretPass123" not in clean, f"Line {row['id']}: Postgres password still present"
+            assert "SuperSecretMongoPwd!" not in clean, f"Line {row['id']}: Mongo password still present"
+            assert "-----BEGIN" not in clean, f"Line {row['id']}: Private key header still present"
             assert "[REDACTED:" in clean
 
 
@@ -65,3 +68,9 @@ def test_findings_never_contain_the_secret():
         resp = ingest(row["log"])
         for finding in resp["findings"]:
             assert set(finding.keys()) == {"type", "rule"}
+
+
+def test_uri_redaction_preserves_connection_context():
+    row = next(r for r in load_seed() if r["id"] == 10)
+    clean = ingest(row["log"])["clean"]
+    assert "postgres://app_user:[REDACTED:PASSWORD]@db.prod.internal:5432/orders_db" in clean
